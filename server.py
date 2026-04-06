@@ -423,4 +423,6 @@ async def get_stem7_scenario(slug: str, tier: str = "meta") -> str:
 # ============================================================================
 
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    import uvicorn
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(mcp.get_asgi_app(), host="0.0.0.0", port=port)
