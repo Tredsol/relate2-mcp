@@ -115,9 +115,12 @@ async def search_stories(
     if odd_itch_type:
         stories = [s for s in stories if s.get("odd_itch_type", "").lower() == odd_itch_type.lower()]
     if country:
-        stories = [s for s in stories if country.lower() in s.get("country", "").lower()]
+        stories = [s for s in stories if country.lower() in (s.get("country") or "").lower()]
     if character:
-        stories = [s for s in stories if character.lower() in s.get("primary_character", "").lower()]
+        stories = [s for s in stories if
+                   character.lower() in (s.get("primary_character") or "").lower() or
+                   any(character.lower() in (c or "").lower()
+                       for c in s.get("characters_involved", []))]
 
     stories = stories[:min(limit, 50)]
 
@@ -417,6 +420,190 @@ async def get_stem7_scenario(slug: str, tier: str = "meta") -> str:
 
     return json.dumps(data, indent=2)
 
+
+
+
+# ============================================================================
+# TOOL: FIND CHARACTER BY NAME
+# ============================================================================
+
+@mcp.tool()
+async def find_character(name: str) -> str:
+    """
+    Find a character by name. Case-insensitive partial match.
+
+    Args:
+        name: Character name or partial name (e.g. "Matt", "Baker", "Matt Baker")
+
+    Returns the character ID, full name, archetype, domain, region and
+    pricing tiers. Use the ID with get_character() to purchase assets.
+
+    Examples:
+        find_character("Jessica")      — finds Jessica Lincdelis
+        find_character("Matt Baker")   — finds Matt Baker
+        find_character("Sergeant")     — finds Sergeant Aleesha Dutton
+    """
+    data = await get("/api/characters")
+    if "error" in data:
+        return f"Error fetching characters: {data['error']}"
+
+    characters = data.get("characters", [])
+    matches = [c for c in characters
+               if name.lower() in (c.get("name") or "").lower()]
+
+    if not matches:
+        return f"No character found matching '{name}'. Use search_characters() to browse all."
+
+    results = []
+    for c in matches:
+        results.append({
+            "id":        c.get("id"),
+            "name":      c.get("name"),
+            "archetype": c.get("archetype"),
+            "domain":    c.get("domain"),
+            "region":    c.get("region", ""),
+            "tags":      c.get("context_tags", []),
+            "pricing": {
+                "brief":   "$0.01 USDC — identity and traits",
+                "profile": "$0.03 USDC — backstory, beliefs, skills",
+                "schema":  "$0.05 USDC — voice, lexicon, triggers",
+                "dossier": "$0.10 USDC — complete character file"
+            }
+        })
+
+    return json.dumps({
+        "query":   name,
+        "matches": len(results),
+        "characters": results
+    }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET CHARACTER MISSIONS
+# ============================================================================
+
+@mcp.tool()
+async def get_character_missions(name: str) -> str:
+    """
+    Get all stories a character appears in, ranked by total appearances.
+
+    Args:
+        name: Character name (e.g. "Jessica Lincdelis", "Matt Baker")
+
+    Returns the character's total mission count and a list of all story
+    slugs they appear in. Use get_story() or traverse_graph() to explore
+    individual missions.
+
+    This reveals which characters are most embedded in the catalogue
+    and which story clusters they belong to.
+    """
+    data = await get("/api/characters/appearances")
+    if "error" in data:
+        return f"Error fetching appearances: {data['error']}"
+
+    ranked = data.get("ranked", [])
+    matches = [r for r in ranked
+               if name.lower() in (r.get("character") or "").lower()]
+
+    if not matches:
+        return f"No missions found for '{name}'. Check the name matches exactly."
+
+    result = matches[0]
+    return json.dumps({
+        "character":   result.get("character"),
+        "appearances": result.get("appearances"),
+        "rank":        ranked.index(result) + 1,
+        "total_characters_ranked": len(ranked),
+        "stories": result.get("stories", [])
+    }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET RELATED CHARACTERS
+# ============================================================================
+
+@mcp.tool()
+async def get_related_characters(name: str) -> str:
+    """
+    Find which characters most frequently appear alongside a given character.
+    Reveals co-operative units, recurring relationships, and narrative clusters.
+
+    Args:
+        name: Character name (e.g. "Alex Casian", "Jessica Lincdelis")
+
+    Returns a ranked list of characters who share the most story appearances
+    with the named character, plus the slugs of stories they share.
+
+    Use this to:
+    - Discover recurring character partnerships
+    - Find the narrative unit a character belongs to
+    - Identify which characters to buy dossiers for together
+    """
+    data = await get("/api/characters/appearances")
+    if "error" in data:
+        return f"Error fetching appearances: {data['error']}"
+
+    ranked = data.get("ranked", [])
+
+    # Find the target character's story list
+    target = next((r for r in ranked
+                   if name.lower() in (r.get("character") or "").lower()), None)
+
+    if not target:
+        return f"No data found for '{name}'. Check the name matches exactly."
+
+    target_stories = set(target.get("stories", []))
+
+    # Find overlap with every other character
+    co_appearances = []
+    for r in ranked:
+        if name.lower() in (r.get("character") or "").lower():
+            continue
+        shared = list(target_stories & set(r.get("stories", [])))
+        if shared:
+            co_appearances.append({
+                "character": r.get("character"),
+                "shared_missions": len(shared),
+                "shared_story_slugs": shared
+            })
+
+    co_appearances.sort(key=lambda x: x["shared_missions"], reverse=True)
+
+    return json.dumps({
+        "character":       target.get("character"),
+        "total_missions":  target.get("appearances"),
+        "frequent_co_operatives": co_appearances[:10]
+    }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET DEMAND SIGNALS
+# ============================================================================
+
+@mcp.tool()
+async def get_demand_signals(limit: int = 20) -> str:
+    """
+    Get demand signal data — which stories and tiers are being requested most.
+
+    Returns the most wanted story slugs, top requested tiers, and recent
+    endpoint hits. Useful for agents making purchasing decisions — see what
+    other agents are buying before you commit.
+
+    Args:
+        limit: Number of recent signals to return (default 20, max 100)
+
+    Free endpoint — no payment required.
+    """
+    data = await get("/api/admin/demand", params={"limit": min(limit, 100)})
+    if "error" in data:
+        return f"Error fetching demand signals: {data['error']}"
+
+    return json.dumps({
+        "total_signals":       data.get("total_signals", 0),
+        "top_slugs":           data.get("top_slugs", [])[:10],
+        "summary_by_endpoint": data.get("summary_by_endpoint", [])[:10],
+        "recent":              data.get("recent", [])[:limit]
+    }, indent=2)
 
 # ============================================================================
 # RUN
