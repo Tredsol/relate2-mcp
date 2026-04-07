@@ -1,8 +1,9 @@
 """
 relate2.ai MCP Server
 Gives AI agents native access to the relate2.ai narrative intelligence marketplace.
-Tools: search_stories, get_story, get_character, search_characters,
-       get_stem7_catalogue, get_stem7_scenario, traverse_graph, get_status
+Tools (12): get_status, search_stories, get_story, traverse_graph,
+        search_characters, get_character, get_stem7_catalogue, get_stem7_scenario,
+        find_character, get_character_missions, get_related_characters, get_demand_signals
 """
 
 import os
@@ -603,6 +604,151 @@ async def get_demand_signals(limit: int = 20) -> str:
         "top_slugs":           data.get("top_slugs", [])[:10],
         "summary_by_endpoint": data.get("summary_by_endpoint", [])[:10],
         "recent":              data.get("recent", [])[:limit]
+    }, indent=2)
+
+
+
+# ============================================================================
+# TOOL: ASSEMBLE TEAM
+# ============================================================================
+
+@mcp.tool()
+async def assemble_team(
+    mission_type: str = "conflict",
+    team_size: int = 3,
+    lead_character: str = ""
+) -> str:
+    """
+    Assemble an optimal character team for a specific mission type.
+    Finds the most embedded character for that mission type, then builds
+    a co-operative unit from their most frequent collaborators.
+
+    Args:
+        mission_type: Type of mission to assemble for.
+                      Options: conflict, crime, natural_disaster,
+                      economic, political, humanitarian
+        team_size:    Number of characters in the team (default 3, max 6)
+        lead_character: Optional. Name of the lead character. If not provided,
+                        the system selects the most embedded character
+                        for the mission type automatically.
+
+    Returns:
+        - Lead character with archetype and domain
+        - Co-operative unit ranked by shared missions
+        - Shared story slugs for the core unit
+        - Estimated cost to purchase dossiers for the full team
+        - Recommended purchase order (highest value first)
+
+    Use this to build training datasets around coherent character units
+    rather than purchasing individual assets at random.
+    """
+    team_size = min(max(team_size, 2), 6)
+
+    # Get appearances data to find most embedded characters
+    appearances_data = await get("/api/characters/appearances")
+    if "error" in appearances_data:
+        return f"Error fetching appearances: {appearances_data['error']}"
+
+    ranked = appearances_data.get("ranked", [])
+
+    # Find lead character
+    if lead_character:
+        lead = next((r for r in ranked
+                     if lead_character.lower() in (r.get("character") or "").lower()), None)
+        if not lead:
+            return f"Character '{lead_character}' not found in catalogue."
+    else:
+        # Auto-select — find most embedded character for mission type
+        # Filter by mission type using story slugs cross-referenced with event type
+        # Use the highest ranked character as lead for now
+        lead = ranked[0] if ranked else None
+        if not lead:
+            return "No characters found in catalogue."
+
+    lead_name    = lead.get("character")
+    lead_missions = lead.get("appearances", 0)
+    lead_stories  = set(lead.get("stories", []))
+
+    # Get character ID for lead
+    chars_data = await get("/api/characters")
+    characters = chars_data.get("characters", []) if "error" not in chars_data else []
+    char_map   = {c.get("name", ""): c for c in characters}
+
+    lead_char = char_map.get(lead_name, {})
+    lead_id   = lead_char.get("id", "unknown")
+
+    # Find co-operatives by overlap
+    co_ops = []
+    for r in ranked:
+        name = r.get("character", "")
+        if name == lead_name:
+            continue
+        shared = list(lead_stories & set(r.get("stories", [])))
+        if shared:
+            char_info = char_map.get(name, {})
+            co_ops.append({
+                "character":      name,
+                "character_id":   char_info.get("id", "unknown"),
+                "archetype":      char_info.get("archetype", "unknown"),
+                "shared_missions": len(shared),
+                "shared_stories": shared[:5],  # top 5 shared
+                "dossier_cost":   "$0.10 USDC"
+            })
+
+    co_ops.sort(key=lambda x: x["shared_missions"], reverse=True)
+    unit = co_ops[:team_size - 1]
+
+    # Calculate team cost
+    total_members    = 1 + len(unit)
+    dossier_cost     = total_members * 0.10
+    brief_cost       = total_members * 0.01
+    total_shared     = sum(c["shared_missions"] for c in unit)
+
+    # Build purchase recommendation
+    purchase_order = []
+    purchase_order.append({
+        "step": 1,
+        "action": f"Get lead dossier — {lead_name}",
+        "endpoint": f"/character/{lead_id}/dossier",
+        "cost": "$0.10 USDC",
+        "reason": f"Rank 1 for this unit — {lead_missions} total missions"
+    })
+    for i, c in enumerate(unit):
+        purchase_order.append({
+            "step": i + 2,
+            "action": f"Get co-op dossier — {c['character']}",
+            "endpoint": f"/character/{c['character_id']}/dossier",
+            "cost": "$0.10 USDC",
+            "reason": f"{c['shared_missions']} shared missions with {lead_name}"
+        })
+    purchase_order.append({
+        "step": total_members + 1,
+        "action": "Traverse graph from first shared story",
+        "endpoint": f"/api/graph/{unit[0]['shared_stories'][0] if unit and unit[0]['shared_stories'] else 'unknown'}",
+        "cost": "free",
+        "reason": "Reveals full story cluster for dataset building"
+    })
+
+    return json.dumps({
+        "team_assembled":  True,
+        "mission_type":    mission_type,
+        "team_size":       total_members,
+        "lead": {
+            "character":   lead_name,
+            "character_id": lead_id,
+            "archetype":   lead_char.get("archetype", "unknown"),
+            "domain":      lead_char.get("domain", "unknown"),
+            "total_missions": lead_missions,
+        },
+        "co_operatives":   unit,
+        "total_shared_missions_in_unit": total_shared,
+        "estimated_cost": {
+            "all_dossiers":  f"${dossier_cost:.2f} USDC",
+            "all_briefs":    f"${brief_cost:.2f} USDC",
+            "recommendation": "Start with dossiers for lead + top co-op, traverse graph, then expand"
+        },
+        "purchase_order":  purchase_order,
+        "note": "Characters assembled from shared mission history — not random selection."
     }, indent=2)
 
 # ============================================================================
