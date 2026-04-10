@@ -276,11 +276,32 @@ async def search_characters(
     if role:
         characters = [c for c in characters
                      if role.lower() in c.get("role", "").lower()
-                     or role.lower() in c.get("operational_tier", "").lower()]
+                     or role.lower() in c.get("operational_tier", "").lower()
+                     or role.lower() in c.get("archetype", "").lower()
+                     or role.lower() in (c.get("domain") or "").lower()]
+
     if region:
+        # Geographic keyword map — regions stored as cultural descriptions
+        geo_map = {
+            "europe":       ["liverpool", "manchester", "london", "birmingham", "glasgow",
+                             "scottish", "welsh", "british", "english", "northern english",
+                             "midlands", "scouse", "uk", "lisbon", "portuguese", "greek",
+                             "nordic", "transylvanian", "romanian", "italian", "naples",
+                             "irish", "west country"],
+            "africa":       ["lagos", "nairobi", "ghanaian", "nigerian", "kenyan",
+                             "west african", "accra", "ashanti"],
+            "middle east":  ["turkish", "istanbul"],
+            "asia":         ["japanese", "tokyo"],
+            "americas":     ["chicago", "puerto rican", "medellin", "colombian"],
+            "uk":           ["liverpool", "manchester", "london", "birmingham", "glasgow",
+                             "scottish", "welsh", "british", "english", "midlands",
+                             "scouse", "west country", "nhs", "northern english"],
+        }
+        region_lower = region.lower()
+        keywords = geo_map.get(region_lower, [region_lower])
         characters = [c for c in characters
-                     if region.lower() in c.get("region", "").lower()
-                     or region.lower() in c.get("country", "").lower()]
+                     if any(kw in c.get("region", "").lower() for kw in keywords)
+                     or any(kw in (c.get("cultural_roots") or "").lower() for kw in keywords)]
 
     characters = characters[:min(limit, 37)]
 
@@ -686,9 +707,12 @@ async def assemble_team(
         shared = list(lead_stories & set(r.get("stories", [])))
         if shared:
             char_info = char_map.get(name, {})
+            char_id = char_info.get("id", "")
+            if not char_id:
+                continue  # skip characters not in active catalogue
             co_ops.append({
                 "character":      name,
-                "character_id":   char_info.get("id", "unknown"),
+                "character_id":   char_id,
                 "archetype":      char_info.get("archetype", "unknown"),
                 "shared_missions": len(shared),
                 "shared_stories": shared[:5],  # top 5 shared
