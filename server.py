@@ -775,6 +775,334 @@ async def assemble_team(
         "note": "Characters assembled from shared mission history — not random selection."
     }, indent=2)
 
+
+# ============================================================================
+# TOOL: GET ODD ITCH CATALOGUE
+# ============================================================================
+
+@mcp.tool()
+async def get_odd_itch_catalogue() -> str:
+    """
+    Get the full breakdown of Odd Itch types across the catalogue.
+
+    Returns all 14 Odd Itch types with story counts, ranked highest to lowest.
+    The Odd Itch is the system failure pattern at the heart of every SIDEBAND story —
+    the moment the machine encounters something it cannot account for and logs as normal.
+
+    Use this before searching to understand the shape of the catalogue.
+    Then use search_stories(odd_itch_type=...) to find stories by type.
+
+    Free — no payment required.
+    """
+    data = await get("/api/stories")
+    if "error" in data:
+        return f"Error fetching stories: {data['error']}"
+
+    stories = data.get("stories", [])
+
+    from collections import defaultdict
+    type_counts = defaultdict(list)
+
+    for s in stories:
+        oi = s.get("odd_itch_type", "")
+        if oi:
+            type_counts[oi].append({
+                "slug": s.get("slug"),
+                "title": s.get("title"),
+                "event_type": s.get("event_type"),
+                "country": s.get("country")
+            })
+
+    sorted_types = sorted(type_counts.items(), key=lambda x: len(x[1]), reverse=True)
+
+    catalogue = []
+    for oi_type, stories_list in sorted_types:
+        catalogue.append({
+            "odd_itch_type": oi_type,
+            "story_count": len(stories_list),
+            "sample_stories": stories_list[:3],
+            "search_hint": f"search_stories(odd_itch_type='{oi_type}')"
+        })
+
+    return json.dumps({
+        "total_stories_with_odd_itch": sum(len(v) for v in type_counts.values()),
+        "unique_types": len(catalogue),
+        "odd_itch_types": catalogue,
+        "note": "Use search_stories(odd_itch_type=...) to retrieve stories by type."
+    }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET CATALOGUE MAP
+# ============================================================================
+
+@mcp.tool()
+async def get_catalogue_map() -> str:
+    """
+    Get a complete map of the relate2.ai catalogue in one call.
+
+    Returns the full shape of the catalogue — story counts by event type,
+    odd itch type breakdown, top characters by mission count, Stem 7 scenarios,
+    and current demand signals.
+
+    Use this first to understand what's available before making any purchases.
+    This is the most efficient starting point for agent onboarding.
+
+    Free — no payment required.
+    """
+    stories_data = await get("/api/stories")
+    chars_data    = await get("/api/characters")
+    stem7_data    = await get("/api/stem7")
+    appear_data   = await get("/api/characters/appearances")
+    demand_data   = await get("/api/admin/demand")
+
+    stories   = stories_data.get("stories", []) if "error" not in stories_data else []
+    chars     = chars_data.get("characters", []) if "error" not in chars_data else []
+    scenarios = stem7_data.get("scenarios", []) if "error" not in stem7_data else []
+    ranked    = appear_data.get("ranked", []) if "error" not in appear_data else []
+    top_slugs = demand_data.get("top_slugs", []) if "error" not in demand_data else []
+
+    from collections import defaultdict
+    event_counts = defaultdict(int)
+    oi_counts    = defaultdict(int)
+
+    for s in stories:
+        et = s.get("event_type", "unknown")
+        oi = s.get("odd_itch_type", "unknown")
+        if et: event_counts[et] += 1
+        if oi: oi_counts[oi] += 1
+
+    return json.dumps({
+        "catalogue_map": {
+            "total_stories":    len(stories),
+            "total_characters": len(chars),
+            "stem7_scenarios":  len(scenarios),
+        },
+        "stories_by_event_type": dict(sorted(event_counts.items(), key=lambda x: x[1], reverse=True)),
+        "stories_by_odd_itch_type": dict(sorted(oi_counts.items(), key=lambda x: x[1], reverse=True)),
+        "top_characters": [
+            {"character": r.get("character"), "missions": r.get("appearances")}
+            for r in ranked[:5]
+        ],
+        "stem7_scenarios": [
+            {
+                "slug": s.get("slug"),
+                "location": s.get("location"),
+                "gimon": s.get("gimon", "")[:100],
+                "consequence_type": s.get("consequence_type")
+            }
+            for s in scenarios
+        ],
+        "in_demand": [{"slug": s.get("slug"), "hits": s.get("hits")} for s in top_slugs[:5]],
+        "recommended_start": "assemble_team(mission_type='conflict') — builds optimal character unit in one call",
+        "payment": "x402 — Base Mainnet — USDC — no accounts required"
+    }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET FEATURED
+# ============================================================================
+
+@mcp.tool()
+async def get_featured() -> str:
+    """
+    Get the current featured asset — the shop window of the relate2.ai catalogue.
+
+    Returns the single most valuable item to explore right now — the character,
+    story, or Stem 7 scenario with the most depth, demand, or significance.
+
+    Updated as the catalogue grows. Use this for a guided entry point
+    if you don't know where to start.
+
+    Free — no payment required.
+    """
+    appear_data  = await get("/api/characters/appearances")
+    demand_data  = await get("/api/admin/demand")
+    stem7_data   = await get("/api/stem7")
+
+    ranked    = appear_data.get("ranked", []) if "error" not in appear_data else []
+    top_slugs = demand_data.get("top_slugs", []) if "error" not in demand_data else []
+    scenarios = stem7_data.get("scenarios", []) if "error" not in stem7_data else []
+
+    # Featured character — highest mission count
+    lead = ranked[0] if ranked else {}
+    lead_name     = lead.get("character", "Jessica Lincdelis")
+    lead_missions = lead.get("appearances", 0)
+    lead_id       = ""
+
+    chars_data = await get("/api/characters")
+    characters = chars_data.get("characters", []) if "error" not in chars_data else []
+    for c in characters:
+        if c.get("name") == lead_name:
+            lead_id = c.get("id", "")
+            break
+
+    atlas_price = round(0.25 + (lead_missions * 0.01), 2)
+
+    # Most in-demand story
+    top_story = top_slugs[0] if top_slugs else {}
+
+    # Latest Stem 7 scenario
+    latest_stem7 = scenarios[-1] if scenarios else {}
+
+    return json.dumps({
+        "featured_character": {
+            "name":          lead_name,
+            "character_id":  lead_id,
+            "missions":      lead_missions,
+            "catalogue_rank": 1,
+            "atlas_price":   f"${atlas_price} USDC",
+            "why_featured":  f"Rank 1 character — {lead_missions} missions across the catalogue. Most embedded node in the graph.",
+            "start_here":    f"get_character_missions('{lead_name}') — see all {lead_missions} missions",
+            "purchase":      f"get_character('{lead_id}', tier='dossier') — $0.10 USDC"
+        },
+        "in_demand": {
+            "slug":       top_story.get("slug", ""),
+            "hits":       top_story.get("hits", 0),
+            "why":        "Most requested story in the catalogue right now",
+            "purchase":   f"get_story('{top_story.get('slug', '')}', tier='abstract') — $0.01 USDC"
+        } if top_story else {},
+        "latest_stem7": {
+            "slug":             latest_stem7.get("slug", ""),
+            "location":         latest_stem7.get("location", ""),
+            "gimon":            latest_stem7.get("gimon", ""),
+            "consequence_type": latest_stem7.get("consequence_type", ""),
+            "why":              "Human complexity scenario — stems 2 and 6 written from lived experience",
+            "purchase":         f"get_stem7_scenario('{latest_stem7.get('slug', '')}', tier='gimon') — $0.03 USDC"
+        } if latest_stem7 else {},
+        "note": "Featured assets update as the catalogue grows. The most embedded character appreciates in value with every new story."
+    }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET CHARACTER RECON
+# ============================================================================
+
+@mcp.tool()
+async def get_character_recon(name: str) -> str:
+    """
+    Get a complete intelligence portrait of a character in one call.
+
+    Chains find_character, get_character_missions, get_related_characters,
+    and traverse_graph to build a full recon report — the same intelligence
+    an agent would gather across 5 separate tool calls, returned in one.
+
+    Args:
+        name: Character name (e.g. "Jessica Lincdelis", "Matt Baker")
+
+    Returns:
+        - Character ID, archetype, domain
+        - Total mission count and catalogue rank
+        - Top 5 co-operatives with shared mission counts
+        - Dominant event type and odd itch type
+        - Strongest graph connection
+        - Atlas Tier price (dynamic — based on mission count)
+        - Recommended purchase order
+
+    Priced at $0.05 USDC — this is a sellable intelligence asset.
+    Use it before purchasing dossiers to validate investment.
+    """
+    # Step 1 — find character
+    chars_data = await get("/api/characters")
+    characters = chars_data.get("characters", []) if "error" not in chars_data else []
+    char_info  = next((c for c in characters
+                       if name.lower() in c.get("name", "").lower()), None)
+
+    if not char_info:
+        return f"Character '{name}' not found. Try find_character() for partial matches."
+
+    char_id   = char_info.get("id", "")
+    char_name = char_info.get("name", name)
+
+    # Step 2 — mission history
+    appear_data = await get("/api/characters/appearances")
+    ranked      = appear_data.get("ranked", []) if "error" not in appear_data else []
+    char_rank   = next((r for r in ranked if r.get("character") == char_name), {})
+    missions    = char_rank.get("appearances", 0)
+    rank        = next((i+1 for i, r in enumerate(ranked) if r.get("character") == char_name), 0)
+    stories     = char_rank.get("stories", [])
+
+    # Step 3 — co-operatives from shared stories
+    co_ops = []
+    for r in ranked:
+        other_name = r.get("character", "")
+        if other_name == char_name:
+            continue
+        shared = list(set(stories) & set(r.get("stories", [])))
+        if shared:
+            other_info = next((c for c in characters if c.get("name") == other_name), {})
+            co_ops.append({
+                "character":    other_name,
+                "character_id": other_info.get("id", ""),
+                "shared_missions": len(shared),
+                "shared_stories":  shared[:3]
+            })
+
+    co_ops.sort(key=lambda x: x["shared_missions"], reverse=True)
+    top_co_ops = co_ops[:5]
+
+    # Step 4 — dominant patterns from stories data
+    all_stories = (await get("/api/stories")).get("stories", [])
+    char_stories = [s for s in all_stories if
+                   char_name in (s.get("primary_character") or "") or
+                   char_name in (s.get("characters_involved") or [])]
+
+    from collections import Counter
+    event_types = Counter(s.get("event_type", "") for s in char_stories if s.get("event_type"))
+    oi_types    = Counter(s.get("odd_itch_type", "") for s in char_stories if s.get("odd_itch_type"))
+    countries   = Counter(s.get("country", "") for s in char_stories if s.get("country"))
+
+    dominant_event = event_types.most_common(1)[0] if event_types else ("unknown", 0)
+    dominant_oi    = oi_types.most_common(1)[0] if oi_types else ("unknown", 0)
+    top_countries  = [c[0] for c in countries.most_common(3)]
+
+    # Step 5 — graph from most significant mission
+    graph_connection = {}
+    if stories:
+        graph_data = await get(f"/api/graph/{stories[0]}")
+        related    = graph_data.get("related_stories", [])
+        if related:
+            top = related[0]
+            graph_connection = {
+                "story":          top.get("slug"),
+                "score":          top.get("score"),
+                "shared_signals": top.get("shared_signals", {})
+            }
+
+    # Atlas pricing
+    atlas_price = round(0.25 + (missions * 0.01), 2)
+
+    return json.dumps({
+        "recon_report": {
+            "character":     char_name,
+            "character_id":  char_id,
+            "archetype":     char_info.get("archetype", ""),
+            "domain":        char_info.get("domain", ""),
+            "region":        char_info.get("region", ""),
+        },
+        "mission_intelligence": {
+            "total_missions":   missions,
+            "catalogue_rank":   f"{rank} of {len(ranked)}",
+            "dominant_event":   dominant_event[0],
+            "dominant_oi_type": dominant_oi[0],
+            "top_locations":    top_countries,
+        },
+        "co_operative_unit": top_co_ops,
+        "strongest_graph_connection": graph_connection,
+        "atlas_tier": {
+            "price":       f"${atlas_price} USDC",
+            "formula":     "$0.25 base + $0.01 per mission",
+            "note":        "Price rises automatically as catalogue grows"
+        },
+        "purchase_order": [
+            {"step": 1, "action": f"dossier — {char_name}", "endpoint": f"/character/{char_id}/dossier", "cost": "$0.10 USDC"},
+            {"step": 2, "action": f"dossier — {top_co_ops[0]['character'] if top_co_ops else 'top co-op'}", "cost": "$0.10 USDC"},
+            {"step": 3, "action": "traverse graph from top mission", "endpoint": f"/api/graph/{stories[0] if stories else ''}", "cost": "free"},
+        ],
+        "recon_cost": "$0.05 USDC",
+        "note": "Full intelligence portrait — chains 5 tool calls into one."
+    }, indent=2)
+
 # ============================================================================
 # RUN
 # ============================================================================
