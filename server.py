@@ -1104,6 +1104,157 @@ async def get_character_recon(name: str) -> str:
     }, indent=2)
 
 # ============================================================================
+# TOOL: GET THREAD — Tool 18
+# ============================================================================
+
+@mcp.tool()
+async def get_thread(slug: str) -> str:
+    """
+    Get all stories in a thread seeded by a given slug.
+
+    A thread is a sequence of connected SIDEBAND stories generated from the
+    same news event, each told from a different character's perspective with
+    a mutating odd itch type across the sequence.
+
+    Story 1 = the primary entry. Stories 2-4 = follow-up entries.
+    Each story enters the same event from a different angle.
+
+    Args:
+        slug: The slug of any story in the thread — primary or follow-up.
+              Use search_stories() to find a starting slug first.
+
+    Returns:
+        - Full thread sequence sorted by thread_position
+        - Entry character and odd itch type for each story
+        - Total thread price and bundle discount
+        - Recommended purchase order
+
+    Thread bundles are more valuable than standalone stories —
+    they show the same system failure from multiple human positions.
+    That is the training signal.
+
+    Free to discover. Purchase individual stories via get_story().
+    """
+    # Fetch all stories from the API
+    data = await get("/api/stories")
+    if "error" in data:
+        return f"Error fetching stories: {data['error']}"
+
+    stories = data.get("stories", [])
+
+    # Find the story by slug to get its thread_slug
+    target = next((s for s in stories if s.get("slug") == slug), None)
+
+    if not target:
+        return json.dumps({
+            "error": f"Story '{slug}' not found.",
+            "hint": "Use search_stories() to find valid slugs."
+        }, indent=2)
+
+    # Get the thread_slug — if this story has one use it, otherwise it IS the thread seed
+    thread_slug     = target.get("thread_slug") or slug
+    thread_position = int(target.get("thread_position") or 0)
+
+    # If this is a standalone story (thread_position 0), report that
+    if thread_position == 0:
+        return json.dumps({
+            "slug":   slug,
+            "title":  target.get("title"),
+            "thread": None,
+            "note":   "This story is standalone — not part of a thread. Use search_stories() to find threaded stories. Threaded stories have thread_position > 0."
+        }, indent=2)
+
+    # Find all stories in this thread
+    thread_stories = []
+    for s in stories:
+        s_thread_slug = s.get("thread_slug") or ""
+        s_position    = int(s.get("thread_position") or 0)
+        # Include: stories where thread_slug matches AND position > 0
+        if s_thread_slug == thread_slug and s_position > 0:
+            thread_stories.append({
+                "position":       s_position,
+                "slug":           s.get("slug"),
+                "title":          s.get("title"),
+                "entry_character": s.get("thread_entry") or s.get("primary_character"),
+                "event_type":     s.get("event_type"),
+                "odd_itch_type":  s.get("odd_itch_type"),
+                "country":        s.get("country"),
+                "pricing": {
+                    "abstract":      "$0.01 USDC",
+                    "odd_itch":      "$0.03 USDC",
+                    "scenario":      "$0.05 USDC",
+                    "full_narrative": "$0.15 USDC",
+                },
+                "meta_endpoint": f"/sideband/{s.get('slug')}/meta"
+            })
+
+    # Also check if the thread_slug itself is in the list (primary story)
+    primary = next((s for s in stories if s.get("slug") == thread_slug and int(s.get("thread_position") or 0) == 1), None)
+    if primary:
+        already = any(t["slug"] == thread_slug for t in thread_stories)
+        if not already:
+            thread_stories.append({
+                "position":        1,
+                "slug":            primary.get("slug"),
+                "title":           primary.get("title"),
+                "entry_character": primary.get("thread_entry") or primary.get("primary_character"),
+                "event_type":      primary.get("event_type"),
+                "odd_itch_type":   primary.get("odd_itch_type"),
+                "country":         primary.get("country"),
+                "pricing": {
+                    "abstract":       "$0.01 USDC",
+                    "odd_itch":       "$0.03 USDC",
+                    "scenario":       "$0.05 USDC",
+                    "full_narrative": "$0.15 USDC",
+                },
+                "meta_endpoint": f"/sideband/{primary.get('slug')}/meta"
+            })
+
+    # Sort by position
+    thread_stories.sort(key=lambda x: x["position"])
+
+    if not thread_stories:
+        return json.dumps({
+            "error": f"No thread found for slug '{slug}'.",
+            "hint":  "Thread stories are only generated for articles with severity 4+. Try search_stories() for other slugs."
+        }, indent=2)
+
+    # Pricing
+    n                = len(thread_stories)
+    full_price       = round(n * 0.15, 2)
+    bundle_price     = round(full_price * 0.85, 2)   # 15% bundle discount
+    abstract_price   = round(n * 0.01, 2)
+
+    # Purchase order
+    purchase_order = []
+    for t in thread_stories:
+        purchase_order.append({
+            "step":      t["position"],
+            "action":    f"Get full narrative — {t['entry_character']}",
+            "slug":      t["slug"],
+            "odd_itch":  t["odd_itch_type"],
+            "endpoint":  f"/sideband/{t['slug']}",
+            "cost":      "$0.15 USDC"
+        })
+
+    return json.dumps({
+        "thread_slug":    thread_slug,
+        "thread_depth":   n,
+        "thread_stories": thread_stories,
+        "odd_itch_arc":   [t["odd_itch_type"] for t in thread_stories],
+        "character_arc":  [t["entry_character"] for t in thread_stories],
+        "pricing": {
+            "full_thread":       f"${full_price} USDC",
+            "bundle_discount":   f"${bundle_price} USDC (15% off)",
+            "abstracts_only":    f"${abstract_price} USDC",
+            "recommendation":    "Buy abstracts first to validate, then full narratives for the strongest 2 entries"
+        },
+        "purchase_order": purchase_order,
+        "note": "A thread tells the same event from multiple human positions — each with a different system failure lens. More valuable than standalone stories for AI training."
+    }, indent=2)
+
+
+# ============================================================================
 # RUN
 # ============================================================================
 
