@@ -1255,6 +1255,85 @@ async def get_thread(slug: str) -> str:
 
 
 # ============================================================================
+# TOOL: GET TRAFFIC — Tool 19
+# ============================================================================
+
+@mcp.tool()
+async def get_traffic(limit: int = 20, type_filter: str = "") -> str:
+    """
+    Get live traffic intelligence from the Cloudflare KV log.
+
+    Returns recent hits on protected endpoints — browser visits, agent hits,
+    and payment attempts. Sorted newest first.
+
+    Args:
+        limit:       Number of entries to return (default 20, max 50)
+        type_filter: Filter by type — "browser_visit", "agent_hit",
+                     "payment_attempt", or "" for all (default)
+
+    Returns:
+        - Entry type (browser_visit / agent_hit / payment_attempt)
+        - Path hit and price tier
+        - Country of origin
+        - User agent snippet
+        - Timestamp
+        - Whether payment was attempted and valid
+
+    This tool reads directly from the Cloudflare KV store via the Flask
+    proxy endpoint. Free — no payment required.
+    """
+    data = await get("/api/admin/traffic")
+    if "error" in data:
+        return json.dumps({
+            "error": "Traffic log unavailable",
+            "hint": "KV logging may not be configured on the Cloudflare Worker."
+        }, indent=2)
+
+    entries = data.get("entries", [])
+
+    # Apply type filter
+    if type_filter:
+        entries = [e for e in entries if e.get("type") == type_filter]
+
+    # Sort newest first and limit
+    entries = sorted(entries, key=lambda x: x.get("timestamp", ""), reverse=True)
+    entries = entries[:min(limit, 50)]
+
+    # Summarise
+    total         = data.get("total", len(entries))
+    browsers      = sum(1 for e in entries if e.get("type") == "browser_visit")
+    agent_hits    = sum(1 for e in entries if e.get("type") == "agent_hit")
+    payments      = sum(1 for e in entries if e.get("type") == "payment_attempt")
+    paid_valid    = sum(1 for e in entries if e.get("paymentValid"))
+
+    # Top paths
+    from collections import Counter
+    path_counts = Counter(e.get("path", "") for e in entries)
+    top_paths   = [{"path": p, "hits": c} for p, c in path_counts.most_common(5)]
+
+    # Top user agents
+    ua_counts = Counter(
+        e.get("userAgent", "")[:60] for e in entries if e.get("userAgent")
+    )
+    top_uas = [{"ua": u, "hits": c} for u, c in ua_counts.most_common(3)]
+
+    return json.dumps({
+        "traffic_summary": {
+            "total_logged":      total,
+            "showing":           len(entries),
+            "browser_visits":    browsers,
+            "agent_hits":        agent_hits,
+            "payment_attempts":  payments,
+            "payments_valid":    paid_valid,
+        },
+        "top_paths":      top_paths,
+        "top_user_agents": top_uas,
+        "entries":        entries,
+        "note": "KV log captures all hits on protected endpoints. Free endpoints are not logged here."
+    }, indent=2)
+
+
+# ============================================================================
 # RUN
 # ============================================================================
 
