@@ -1334,6 +1334,98 @@ async def get_traffic(limit: int = 20, type_filter: str = "") -> str:
 
 
 # ============================================================================
+# TOOL: GET PATTERNS — Tool 20
+# ============================================================================
+
+@mcp.tool()
+async def get_patterns(
+    odd_itch_type: str = "",
+    event_type: str = "",
+    pattern_class: str = "",
+    min_occurrences: int = 3,
+    limit: int = 20,
+    detail: str = "full"
+) -> str:
+    """
+    Get system behaviour patterns extracted from the catalogue.
+
+    Patterns are recurring system failure archetypes identified automatically
+    from story signal clusters. No manual curation. Patterns strengthen
+    as the catalogue grows.
+
+    Args:
+        odd_itch_type:    Filter by odd itch type (e.g. "temporal", "verification",
+                          "identity", "bureaucratic", "transactional")
+        event_type:       Filter by event type (e.g. "conflict", "crime",
+                          "natural_disaster", "healthcare", "finance")
+        pattern_class:    Filter by class (e.g. "temporal_paradox",
+                          "verification_breakdown", "identity_failure",
+                          "procedural_deadlock", "transactional_impossibility",
+                          "classification_error", "measurement_paradox")
+        min_occurrences:  Minimum times a pattern must appear (default 3)
+        limit:            Max patterns to return (default 20)
+        detail:           "full" includes shared_behaviour + example_slugs (default)
+                          "summary" returns names, counts, signals only
+
+    Returns:
+        - Pattern name and machine-readable pattern_class
+        - Occurrence count and confidence score
+        - score_basis — how confidence was derived
+        - Core signals — mechanism tags that define the pattern
+        - Shared behaviour — what always happens in this pattern
+        - Systems involved — which system types produce this pattern
+        - Example slugs — real stories from the catalogue
+        - Pricing for the extract endpoint (coming soon)
+
+    Use patterns to:
+    - Understand what system failure types dominate the catalogue
+    - Find story clusters before buying individual assets
+    - Build targeted training datasets around specific failure archetypes
+    - Chain with traverse_graph() to find related stories for each pattern
+
+    The dominant pattern is: Timestamp Drift Under Fire (temporal_paradox,
+    conflict) — 27 occurrences, confidence 1.0.
+
+    Free — no payment required.
+    """
+    params = []
+    if odd_itch_type:     params.append(f"odd_itch={odd_itch_type}")
+    if event_type:        params.append(f"event_type={event_type}")
+    if min_occurrences:   params.append(f"min_occurrences={min_occurrences}")
+    if limit:             params.append(f"limit={limit}")
+    if detail:            params.append(f"detail={detail}")
+
+    query_string = "?" + "&".join(params) if params else ""
+    data = await get(f"/api/patterns{query_string}")
+
+    if "error" in data:
+        return json.dumps({
+            "error": data["error"],
+            "hint": "Pattern index may not be generated yet. Run pattern_engine.py and redeploy."
+        }, indent=2)
+
+    patterns = data.get("patterns", [])
+    summary  = data.get("summary", {})
+
+    # Apply pattern_class filter client-side if specified
+    if pattern_class:
+        patterns = [p for p in patterns if p.get("pattern_class") == pattern_class]
+
+    return json.dumps({
+        "summary":        summary,
+        "total_patterns": len(patterns),
+        "patterns":       patterns,
+        "usage": {
+            "next_step_graph":   "traverse_graph(example_slugs[0]) — find related stories for a pattern",
+            "next_step_thread":  "get_thread(example_slugs[0]) — check if pattern stories are threaded",
+            "next_step_stories": "search_stories(odd_itch_type=pattern.odd_itch_type) — retrieve all matching stories",
+            "next_step_extract": "POST /api/patterns/extract — slug-specific pattern extraction ($0.05 USDC, coming soon)"
+        },
+        "note": "Patterns emerge automatically from catalogue volume. No manual curation."
+    }, indent=2)
+
+
+# ============================================================================
 # RUN
 # ============================================================================
 
