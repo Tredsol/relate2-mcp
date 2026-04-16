@@ -1,9 +1,12 @@
 """
 relate2.ai MCP Server
 Gives AI agents native access to the relate2.ai narrative intelligence marketplace.
-Tools (12): get_status, search_stories, get_story, traverse_graph,
+Tools (21): get_status, search_stories, get_story, traverse_graph,
         search_characters, get_character, get_stem7_catalogue, get_stem7_scenario,
-        find_character, get_character_missions, get_related_characters, get_demand_signals
+        find_character, get_character_missions, get_related_characters,
+        get_catalogue_map, get_character_recon, assemble_team, get_featured,
+        get_odd_itch_catalogue, get_thread, get_traffic, get_patterns,
+        get_demand_signals
 """
 
 import os
@@ -1423,6 +1426,74 @@ async def get_patterns(
         },
         "note": "Patterns emerge automatically from catalogue volume. No manual curation."
     }, indent=2)
+
+
+# ============================================================================
+# TOOL: GET DEMAND SIGNALS — Tool 21
+# ============================================================================
+
+@mcp.tool()
+async def get_demand_signals(period: str = "today") -> str:
+    """
+    Get live demand intelligence from the Cloudflare KV log.
+
+    Shows what's hot, who is hitting the site, where they're from,
+    and whether agents are attempting to pay. Aggregated from every
+    x402 hit logged by the Cloudflare Worker.
+
+    Args:
+        period: Time window to focus on.
+                Options: "today" (default), "all"
+
+    Returns:
+        - hottest_stories   — top 10 slugs by hit count
+        - type_breakdown    — browser_visit vs agent_hit vs payment_attempt
+        - country_breakdown — countries hitting the marketplace
+        - top_user_agents   — top 10 agents/browsers hitting the wall
+        - today             — today's hit count and paths
+        - payment_attempts  — total X-PAYMENT headers received
+        - total_log_entries — total entries in the KV log
+
+    Use this to:
+    - Find which stories agents are most interested in
+    - Identify active agents knocking on the wall
+    - Track payment attempt volume
+    - See which countries are discovering the catalogue
+
+    Free — no payment required.
+    """
+    data = await get("/api/logs")
+
+    if "error" in data:
+        return json.dumps({
+            "error": "Demand signals unavailable",
+            "hint": "Ensure /api/logs is deployed on Render and Cloudflare credentials are set."
+        }, indent=2)
+
+    result = {
+        "brand":              "Tremibas®",
+        "generated_at":       data.get("generated_at"),
+        "total_log_entries":  data.get("total_log_entries", 0),
+        "payment_attempts":   data.get("payment_attempts", 0),
+        "hottest_stories":    data.get("hottest_stories", []),
+        "type_breakdown":     data.get("type_breakdown", {}),
+        "country_breakdown":  data.get("country_breakdown", []),
+        "top_user_agents":    data.get("top_user_agents", []),
+        "today":              data.get("today", {}),
+        "note": "Live from Cloudflare KV — every x402 hit logged by the Worker."
+    }
+
+    # If period is "today", highlight today's data
+    if period == "today":
+        today = data.get("today", {})
+        result["focus"] = {
+            "period":     "today",
+            "date":       today.get("date"),
+            "hits":       today.get("hits", 0),
+            "paths_hit":  today.get("paths", [])
+        }
+
+    return json.dumps(result, indent=2)
 
 
 # ============================================================================
