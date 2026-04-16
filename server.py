@@ -602,37 +602,6 @@ async def get_related_characters(name: str) -> str:
 
 
 # ============================================================================
-# TOOL: GET DEMAND SIGNALS
-# ============================================================================
-
-@mcp.tool()
-async def get_demand_signals(limit: int = 20) -> str:
-    """
-    Get demand signal data — which stories and tiers are being requested most.
-
-    Returns the most wanted story slugs, top requested tiers, and recent
-    endpoint hits. Useful for agents making purchasing decisions — see what
-    other agents are buying before you commit.
-
-    Args:
-        limit: Number of recent signals to return (default 20, max 100)
-
-    Free endpoint — no payment required.
-    """
-    data = await get("/api/admin/demand", params={"limit": min(limit, 100)})
-    if "error" in data:
-        return f"Error fetching demand signals: {data['error']}"
-
-    return json.dumps({
-        "total_signals":       data.get("total_signals", 0),
-        "top_slugs":           data.get("top_slugs", [])[:10],
-        "summary_by_endpoint": data.get("summary_by_endpoint", [])[:10],
-        "recent":              data.get("recent", [])[:limit]
-    }, indent=2)
-
-
-
-# ============================================================================
 # TOOL: ASSEMBLE TEAM
 # ============================================================================
 
