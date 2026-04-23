@@ -56,21 +56,23 @@ async def get_status() -> str:
     if "error" in data:
         return f"Error fetching status: {data['error']}"
 
-    cat = data.get("catalogue", {})
-    x402 = data.get("x402", {})
-
     return json.dumps({
-        "marketplace":        "relate2.ai",
-        "brand":              "Tremibas®",
-        "total_stories":      cat.get("total", 0),
-        "sideband_auto":      cat.get("sideband_auto", 0),
-        "premium_odd_itch":   cat.get("premium_odd_itch", 0),
-        "stem7_scenarios":    "use get_stem7_catalogue() for count",
-        "payment_protocol":   "x402",
-        "network":            x402.get("network", "eip155:8453"),
-        "currency":           "USDC",
-        "receiving_address":  x402.get("receiving_address", ""),
-        "status":             x402.get("status", "unknown"),
+        "marketplace":      "relate2.ai",
+        "brand":            "Tremibas®",
+        "total_stories":    data.get("total_stories", 0),
+        "sideband_auto":    data.get("sideband_auto", 0),
+        "premium_odd_itch": data.get("premium_odd_itch", 0),
+        "off_frequency":    3,
+        "stem7_scenarios":  "use get_stem7_catalogue() for count",
+        "total_patterns":   data.get("total_patterns", 0),
+        "total_characters": data.get("total_characters", 37),
+        "mcp_tools":        21,
+        "payment_protocol": "x402",
+        "network":          data.get("network", "eip155:8453"),
+        "currency":         "USDC",
+        "receiving_address": data.get("receiving_address", ""),
+        "status":           data.get("status", "active"),
+        "four_series":      ["SIDEBAND™", "Odd Itch™ Premium", "Off Frequency", "Stem 7™"],
         "note": "All paid endpoints return HTTP 402 with full x402 payment details."
     }, indent=2)
 
@@ -92,10 +94,11 @@ async def search_stories(
 
     Args:
         event_type:    Filter by event type. Options: conflict, crime,
-                       natural_disaster, economic, political, humanitarian
-        odd_itch_type: Filter by Odd Itch type. Options: measurement_failure,
-                       temporal_glitch, incentive_distortion,
-                       emotional_contradiction, system_blindness,
+                       natural_disaster, economic, political, humanitarian,
+                       health, technological, transport, environmental, industrial
+        odd_itch_type: Filter by Odd Itch type. Options: temporal, verification,
+                       identity, transactional, geographic, classification,
+                       measurement, bureaucratic, measurement_failure,
                        prediction_error, system_success_disturbing
         country:       Filter by country name (e.g. "Lebanon", "Iran")
         character:     Filter by character name (e.g. "Jessica Lincdelis")
@@ -228,11 +231,12 @@ async def traverse_graph(slug: str) -> str:
     - Find stories with similar system failure patterns
 
     Graph weights:
-    - Characters (0.35) — strongest signal
-    - Event type (0.25)
-    - Odd Itch type (0.20)
-    - Tags (0.10)
-    - Location (0.03)
+    - Odd Itch type (0.35) — strongest signal — same system failure pattern
+    - Mechanism tags (0.25) — how the system failed
+    - Event type (0.20) — broad domain match
+    - Themes (0.12) — thematic resonance
+    - Characters (0.05) — weak edge, coincidental
+    - Location (0.03) — weakest, surface signal
     """
     data = await get(f"/api/graph/{slug}")
     if "error" in data:
@@ -602,6 +606,37 @@ async def get_related_characters(name: str) -> str:
 
 
 # ============================================================================
+# TOOL: GET DEMAND SIGNALS
+# ============================================================================
+
+@mcp.tool()
+async def get_demand_signals(limit: int = 20) -> str:
+    """
+    Get demand signal data — which stories and tiers are being requested most.
+
+    Returns the most wanted story slugs, top requested tiers, and recent
+    endpoint hits. Useful for agents making purchasing decisions — see what
+    other agents are buying before you commit.
+
+    Args:
+        limit: Number of recent signals to return (default 20, max 100)
+
+    Free endpoint — no payment required.
+    """
+    data = await get("/api/admin/demand", params={"limit": min(limit, 100)})
+    if "error" in data:
+        return f"Error fetching demand signals: {data['error']}"
+
+    return json.dumps({
+        "total_signals":       data.get("total_signals", 0),
+        "top_slugs":           data.get("top_slugs", [])[:10],
+        "summary_by_endpoint": data.get("summary_by_endpoint", [])[:10],
+        "recent":              data.get("recent", [])[:limit]
+    }, indent=2)
+
+
+
+# ============================================================================
 # TOOL: ASSEMBLE TEAM
 # ============================================================================
 
@@ -619,7 +654,7 @@ async def assemble_team(
     Args:
         mission_type: Type of mission to assemble for.
                       Options: conflict, crime, natural_disaster,
-                      economic, political, humanitarian
+                      economic, political, humanitarian, health, social
         team_size:    Number of characters in the team (default 3, max 6)
         lead_character: Optional. Name of the lead character. If not provided,
                         the system selects the most embedded character
@@ -757,7 +792,9 @@ async def get_odd_itch_catalogue() -> str:
     """
     Get the full breakdown of Odd Itch types across the catalogue.
 
-    Returns all 14 Odd Itch types with story counts, ranked highest to lowest.
+    Returns all active Odd Itch types with story counts, ranked highest to lowest.
+    Currently 14+ types — temporal, verification, identity, transactional, geographic,
+    classification, measurement, bureaucratic and more. Growing as new domains mature.
     The Odd Itch is the system failure pattern at the heart of every SIDEBAND story —
     the moment the machine encounters something it cannot account for and logs as normal.
 
@@ -812,14 +849,13 @@ async def get_odd_itch_catalogue() -> str:
 async def get_catalogue_map() -> str:
     """
     Get a complete map of the relate2.ai catalogue in one call.
-
     Returns the full shape of the catalogue — story counts by event type,
     odd itch type breakdown, top characters by mission count, Stem 7 scenarios,
     and current demand signals.
-
+    Four series: SIDEBAND™ (machine, 274+ stories), Odd Itch™ Premium (human, 10 stories),
+    Off Frequency (field dispatches, 3 stories), Stem 7™ (seam layer, 3 scenarios).
     Use this first to understand what's available before making any purchases.
     This is the most efficient starting point for agent onboarding.
-
     Free — no payment required.
     """
     stories_data = await get("/api/stories")
@@ -1356,7 +1392,9 @@ async def get_patterns(
     - Chain with traverse_graph() to find related stories for each pattern
 
     The dominant pattern is: Timestamp Drift Under Fire (temporal_paradox,
-    conflict) — 27 occurrences, confidence 1.0.
+    conflict) — 29 occurrences, confidence 1.0. 29 patterns total across
+    temporal_paradox, verification_breakdown, identity_failure, procedural_deadlock
+    and more. Patterns grow automatically as catalogue volume increases.
 
     Free — no payment required.
     """
