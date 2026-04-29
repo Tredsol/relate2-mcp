@@ -722,7 +722,7 @@ async def assemble_team(
                 "character_id":   char_id,
                 "archetype":      char_info.get("archetype", "unknown"),
                 "shared_missions": len(shared),
-                "shared_story_count": len(shared),  # use traverse_graph() to explore
+                "shared_stories": shared[:5],  # top 5 shared
                 "dossier_cost":   "$0.10 USDC"
             })
 
@@ -755,7 +755,7 @@ async def assemble_team(
     purchase_order.append({
         "step": total_members + 1,
         "action": "Traverse graph from first shared story",
-        "endpoint": "/api/graph/{slug} — use traverse_graph() with any story slug from the team's missions",
+        "endpoint": f"/api/graph/{unit[0]['shared_stories'][0] if unit and unit[0]['shared_stories'] else 'unknown'}",
         "cost": "free",
         "reason": "Reveals full story cluster for dataset building"
     })
@@ -852,7 +852,7 @@ async def get_catalogue_map() -> str:
     Returns the full shape of the catalogue — story counts by event type,
     odd itch type breakdown, top characters by mission count, Stem 7 scenarios,
     and current demand signals.
-    Four series: SIDEBAND™ (machine, 280+ stories), Odd Itch™ Premium (human, 10 stories),
+    Four series: SIDEBAND™ (machine, 318+ stories), Odd Itch™ Premium (human, 10 stories),
     Off Frequency (field dispatches, 3 stories), Stem 7™ (seam layer, 3 scenarios).
     Use this first to understand what's available before making any purchases.
     This is the most efficient starting point for agent onboarding.
@@ -901,7 +901,7 @@ async def get_catalogue_map() -> str:
             }
             for s in scenarios
         ],
-        "in_demand_count": len(top_slugs),  # use get_demand_signals() for full detail
+        "in_demand": [{"slug": s.get("slug"), "hits": s.get("hits")} for s in top_slugs[:5]],
         "recommended_start": "assemble_team(mission_type='conflict') — builds optimal character unit in one call",
         "payment": "x402 — Base Mainnet — USDC — no accounts required"
     }, indent=2)
@@ -965,17 +965,18 @@ async def get_featured() -> str:
             "purchase":      f"get_character('{lead_id}', tier='dossier') — $0.10 USDC"
         },
         "in_demand": {
-            "series":     "Off Frequency",
-            "why":        "Off Frequency stories are the most requested series — use search_stories(series='off_frequency') to browse",
-            "note":       "get_demand_signals() shows the full demand picture without influencing it"
-        },
+            "slug":       top_story.get("slug", ""),
+            "hits":       top_story.get("hits", 0),
+            "why":        "Most requested story in the catalogue right now",
+            "purchase":   f"get_story('{top_story.get('slug', '')}', tier='abstract') — $0.01 USDC"
+        } if top_story else {},
         "latest_stem7": {
             "slug":             latest_stem7.get("slug", ""),
             "location":         latest_stem7.get("location", ""),
             "gimon":            latest_stem7.get("gimon", ""),
             "consequence_type": latest_stem7.get("consequence_type", ""),
             "why":              "Human complexity scenario — stems 2 and 6 written from lived experience",
-            "purchase":         "get_stem7_catalogue() to browse all scenarios, then get_stem7_scenario(slug, tier='gimon') — $0.03 USDC"
+            "purchase":         f"get_stem7_scenario('{latest_stem7.get('slug', '')}', tier='gimon') — $0.03 USDC"
         } if latest_stem7 else {},
         "note": "Featured assets update as the catalogue grows. The most embedded character appreciates in value with every new story."
     }, indent=2)
@@ -1042,7 +1043,7 @@ async def get_character_recon(name: str) -> str:
                 "character":    other_name,
                 "character_id": other_info.get("id", ""),
                 "shared_missions": len(shared),
-                "shared_story_count": len(shared)  # use get_character_missions() to explore
+                "shared_stories":  shared[:3]
             })
 
     co_ops.sort(key=lambda x: x["shared_missions"], reverse=True)
@@ -1391,7 +1392,7 @@ async def get_patterns(
     - Chain with traverse_graph() to find related stories for each pattern
 
     The dominant pattern is: Timestamp Drift Under Fire (temporal_paradox,
-    conflict) — 32 occurrences, confidence 1.0. 32 patterns total across
+    conflict) — 32 occurrences, confidence 1.0. 33 patterns total across
     temporal_paradox, verification_breakdown, identity_failure, procedural_deadlock
     and more. Patterns grow automatically as catalogue volume increases.
 
@@ -1425,8 +1426,8 @@ async def get_patterns(
         "total_patterns": len(patterns),
         "patterns":       patterns,
         "usage": {
-            "next_step_graph":   "traverse_graph(slug) — pick any slug from example_slugs and traverse the graph",
-            "next_step_thread":  "get_thread(slug) — pick any slug from example_slugs to check threading",
+            "next_step_graph":   "traverse_graph(example_slugs[0]) — find related stories for a pattern",
+            "next_step_thread":  "get_thread(example_slugs[0]) — check if pattern stories are threaded",
             "next_step_stories": "search_stories(odd_itch_type=pattern.odd_itch_type) — retrieve all matching stories",
             "next_step_extract": "POST /api/patterns/extract — slug-specific pattern extraction ($0.05 USDC, coming soon)"
         },
