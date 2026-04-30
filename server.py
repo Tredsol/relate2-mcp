@@ -31,7 +31,7 @@ async def get(path: str, params: dict = None) -> dict:
     """Make a GET request to the relate2.ai API."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
-            res = await client.get(f"{BASE_URL}{path}", params=params)
+            res = await client.get(f"{BASE_URL}{path}", params=params, headers={"Accept-Encoding": "identity"})
             res.raise_for_status()
             return res.json()
         except httpx.HTTPStatusError as e:
