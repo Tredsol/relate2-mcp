@@ -614,25 +614,41 @@ async def get_demand_signals(limit: int = 20) -> str:
     """
     Get demand signal data — which stories and tiers are being requested most.
 
-    Returns the most wanted story slugs, top requested tiers, and recent
-    endpoint hits. Useful for agents making purchasing decisions — see what
-    other agents are buying before you commit.
+    Returns the most wanted story slugs, top requested tiers, recent
+    endpoint hits, and traffic breakdown. Useful for agents making
+    purchasing decisions — see what others are hitting before you commit.
+
+    Pulls from two sources: /api/admin/demand (top slugs, always works)
+    and /api/admin/traffic (recent raw hits, when available).
 
     Args:
         limit: Number of recent signals to return (default 20, max 100)
 
     Free endpoint — no payment required.
     """
+    # Primary source — always works
     data = await get("/api/admin/demand", params={"limit": min(limit, 100)})
-    if "error" in data:
-        return f"Error fetching demand signals: {data['error']}"
 
-    return json.dumps({
-        "total_signals":       data.get("total_signals", 0),
-        "top_slugs":           data.get("top_slugs", [])[:10],
-        "summary_by_endpoint": data.get("summary_by_endpoint", [])[:10],
-        "recent":              data.get("recent", [])[:limit]
-    }, indent=2)
+    result = {
+        "total_signals":       data.get("total_signals", 0) if "error" not in data else 0,
+        "top_slugs":           data.get("top_slugs", [])[:10] if "error" not in data else [],
+        "summary_by_endpoint": data.get("summary_by_endpoint", [])[:10] if "error" not in data else [],
+        "recent":              data.get("recent", [])[:limit] if "error" not in data else [],
+    }
+
+    # Supplementary source — richer traffic data when available
+    traffic = await get("/api/admin/traffic")
+    if "error" not in traffic:
+        entries = traffic.get("entries", [])
+        from collections import Counter
+        countries = Counter(e.get("country", "?") for e in entries if e.get("country"))
+        agents = Counter(e.get("userAgent", "")[:80] for e in entries if e.get("userAgent"))
+        result["country_breakdown"] = [{"country": c, "hits": n} for c, n in countries.most_common(10)]
+        result["top_agents"] = [{"agent": a, "hits": n} for a, n in agents.most_common(5)]
+        result["total_traffic_logged"] = traffic.get("total", len(entries))
+        result["recent_raw"] = sorted(entries, key=lambda x: x.get("timestamp", ""), reverse=True)[:10]
+
+    return json.dumps(result, indent=2)
 
 
 
@@ -1292,6 +1308,15 @@ async def get_traffic(limit: int = 20, type_filter: str = "") -> str:
     """
     data = await get("/api/admin/traffic")
     if "error" in data:
+        # Fallback — try demand endpoint for partial picture
+        fallback = await get("/api/admin/demand", params={"limit": 50})
+        if "error" not in fallback:
+            return json.dumps({
+                "note": "Full traffic log unavailable — showing demand signals instead.",
+                "top_slugs": fallback.get("top_slugs", [])[:10],
+                "recent": fallback.get("recent", [])[:limit],
+                "hint": "Deploy /api/admin/traffic on Render and ensure Cloudflare KV credentials are set."
+            }, indent=2)
         return json.dumps({
             "error": "Traffic log unavailable",
             "hint": "KV logging may not be configured on the Cloudflare Worker."
@@ -1436,71 +1461,11 @@ async def get_patterns(
 
 
 # ============================================================================
-# TOOL: GET DEMAND SIGNALS — Tool 21
+# NOTE: get_demand_signals is defined above at Tool 8 (line ~612).
+# The duplicate that was here has been removed — Python uses last definition,
+# so the broken /api/logs version was silently overwriting the working
+# /api/admin/demand version on every run. Fixed 11 May 2026.
 # ============================================================================
-
-@mcp.tool()
-async def get_demand_signals(period: str = "today") -> str:
-    """
-    Get live demand intelligence from the Cloudflare KV log.
-
-    Shows what's hot, who is hitting the site, where they're from,
-    and whether agents are attempting to pay. Aggregated from every
-    x402 hit logged by the Cloudflare Worker.
-
-    Args:
-        period: Time window to focus on.
-                Options: "today" (default), "all"
-
-    Returns:
-        - hottest_stories   — top 10 slugs by hit count
-        - type_breakdown    — browser_visit vs agent_hit vs payment_attempt
-        - country_breakdown — countries hitting the marketplace
-        - top_user_agents   — top 10 agents/browsers hitting the wall
-        - today             — today's hit count and paths
-        - payment_attempts  — total X-PAYMENT headers received
-        - total_log_entries — total entries in the KV log
-
-    Use this to:
-    - Find which stories agents are most interested in
-    - Identify active agents knocking on the wall
-    - Track payment attempt volume
-    - See which countries are discovering the catalogue
-
-    Free — no payment required.
-    """
-    data = await get("/api/logs")
-
-    if "error" in data:
-        return json.dumps({
-            "error": "Demand signals unavailable",
-            "hint": "Ensure /api/logs is deployed on Render and Cloudflare credentials are set."
-        }, indent=2)
-
-    result = {
-        "brand":              "Tremibas®",
-        "generated_at":       data.get("generated_at"),
-        "total_log_entries":  data.get("total_log_entries", 0),
-        "payment_attempts":   data.get("payment_attempts", 0),
-        "hottest_stories":    data.get("hottest_stories", []),
-        "type_breakdown":     data.get("type_breakdown", {}),
-        "country_breakdown":  data.get("country_breakdown", []),
-        "top_user_agents":    data.get("top_user_agents", []),
-        "today":              data.get("today", {}),
-        "note": "Live from Cloudflare KV — every x402 hit logged by the Worker."
-    }
-
-    # If period is "today", highlight today's data
-    if period == "today":
-        today = data.get("today", {})
-        result["focus"] = {
-            "period":     "today",
-            "date":       today.get("date"),
-            "hits":       today.get("hits", 0),
-            "paths_hit":  today.get("paths", [])
-        }
-
-    return json.dumps(result, indent=2)
 
 
 # ============================================================================
