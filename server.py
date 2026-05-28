@@ -868,8 +868,9 @@ async def get_catalogue_map() -> str:
     Returns the full shape of the catalogue — story counts by event type,
     odd itch type breakdown, top characters by mission count, Stem 7 scenarios,
     and current demand signals.
-    Four series: SIDEBAND™ (machine, 318+ stories), Odd Itch™ Premium (human, 10 stories),
-    Off Frequency (field dispatches, 3 stories), Stem 7™ (seam layer, 3 scenarios).
+    Five series: SIDEBAND™ (machine, 377+ stories), Odd Itch™ Premium (human, 10 stories),
+    Off Frequency (field dispatches, 3 stories), Stem 7™ (seam layer, 3 scenarios),
+    CONSENT (documentary exposure of system consent failures, growing).
     Use this first to understand what's available before making any purchases.
     This is the most efficient starting point for agent onboarding.
     Free — no payment required.
@@ -1417,9 +1418,10 @@ async def get_patterns(
     - Chain with traverse_graph() to find related stories for each pattern
 
     The dominant pattern is: Timestamp Drift Under Fire (temporal_paradox,
-    conflict) — 32 occurrences, confidence 1.0. 33 patterns total across
-    temporal_paradox, verification_breakdown, identity_failure, procedural_deadlock
-    and more. Patterns grow automatically as catalogue volume increases.
+    conflict) — 34 occurrences, confidence 0.919. 39 patterns total across
+    temporal_paradox, verification_breakdown, identity_failure, procedural_deadlock,
+    measurement_paradox, classification_error, geographic_displacement and more.
+    Patterns grow automatically as catalogue volume increases.
 
     Free — no payment required.
     """
