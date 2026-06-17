@@ -664,64 +664,152 @@ async def assemble_team(
 ) -> str:
     """
     Assemble an optimal character team for a specific mission type.
-    Finds the most embedded character for that mission type, then builds
-    a co-operative unit from their most frequent collaborators.
+    Selects the lead character by domain mission count — the character
+    with the most missions in the requested domain leads, not just the
+    overall rank 1. Falls back gracefully if no domain history exists.
 
     Args:
         mission_type: Type of mission to assemble for.
                       Options: conflict, crime, natural_disaster,
                       economic, political, humanitarian, health, social
         team_size:    Number of characters in the team (default 3, max 6)
-        lead_character: Optional. Name of the lead character. If not provided,
-                        the system selects the most embedded character
-                        for the mission type automatically.
+        lead_character: Optional. Override auto-selection with a named character.
 
     Returns:
-        - Lead character with archetype and domain
-        - Co-operative unit ranked by shared missions
+        - Lead character selected by domain mission count
+        - Co-operative unit ranked by shared missions with lead
         - Shared story slugs for the core unit
         - Estimated cost to purchase dossiers for the full team
         - Recommended purchase order (highest value first)
+        - lead_reason explaining why this character leads
 
     Use this to build training datasets around coherent character units
     rather than purchasing individual assets at random.
+    Free to discover. Paid to unlock.
     """
     team_size = min(max(team_size, 2), 6)
 
-    # Get appearances data to find most embedded characters
+    # Get appearances data — includes story slugs per character
     appearances_data = await get("/api/characters/appearances")
     if "error" in appearances_data:
         return f"Error fetching appearances: {appearances_data['error']}"
 
     ranked = appearances_data.get("ranked", [])
 
-    # Find lead character
-    if lead_character:
-        lead = next((r for r in ranked
-                     if lead_character.lower() in (r.get("character") or "").lower()), None)
-        if not lead:
-            return f"Character '{lead_character}' not found in catalogue."
-    else:
-        # Auto-select — find most embedded character for mission type
-        # Filter by mission type using story slugs cross-referenced with event type
-        # Use the highest ranked character as lead for now
-        lead = ranked[0] if ranked else None
-        if not lead:
-            return "No characters found in catalogue."
+    # Get full story catalogue to build event_type lookup
+    stories_data = await get("/api/stories")
+    stories_list = stories_data.get("stories", []) if "error" not in stories_data else []
 
-    lead_name    = lead.get("character")
-    lead_missions = lead.get("appearances", 0)
-    lead_stories  = set(lead.get("stories", []))
+    # Build slug → event_type map
+    slug_to_event = {}
+    for s in stories_list:
+        slug = s.get("slug", "")
+        event_type = s.get("event_type", "")
+        if slug and event_type:
+            slug_to_event[slug] = event_type.lower()
 
-    # Get character ID for lead
+    # Normalise mission_type for matching
+    mission_norm = mission_type.lower().strip()
+
+    # Map common aliases
+    MISSION_ALIASES = {
+        "natural_disaster": ["natural_disaster", "disaster", "infrastructure"],
+        "economic":         ["economic", "finance", "financial"],
+        "humanitarian":     ["humanitarian", "health", "social"],
+        "crime":            ["crime", "conflict"],
+        "political":        ["political", "social"],
+        "health":           ["health", "humanitarian"],
+        "social":           ["social", "political"],
+        "conflict":         ["conflict", "crime"],
+        "infrastructure":   ["infrastructure", "natural_disaster"],
+    }
+    match_types = MISSION_ALIASES.get(mission_norm, [mission_norm])
+
+    def domain_missions(char_entry):
+        """Count missions matching the requested domain for a character."""
+        stories = char_entry.get("stories", [])
+        return sum(1 for slug in stories
+                   if slug_to_event.get(slug, "") in match_types)
+
+    # Get character details for Atlas + archetype
     chars_data = await get("/api/characters")
     characters = chars_data.get("characters", []) if "error" not in chars_data else []
     char_map   = {c.get("name", ""): c for c in characters}
 
+    # ── LEAD SELECTION ──────────────────────────────────────────────────────
+
+    if lead_character:
+        # Manual override
+        lead = next((r for r in ranked
+                     if lead_character.lower() in (r.get("character") or "").lower()), None)
+        if not lead:
+            return f"Character '{lead_character}' not found in catalogue."
+        lead_reason      = f"Manually specified — {lead.get('appearances', 0)} total missions"
+        domain_history   = True
+
+    else:
+        # Step 1 — Domain mission count
+        for r in ranked:
+            r["_domain_missions"] = domain_missions(r)
+
+        domain_ranked = sorted(ranked, key=lambda r: r["_domain_missions"], reverse=True)
+        top_domain_count = domain_ranked[0]["_domain_missions"] if domain_ranked else 0
+
+        if top_domain_count > 0:
+            # Characters tied on domain missions
+            tied = [r for r in domain_ranked if r["_domain_missions"] == top_domain_count]
+
+            if len(tied) == 1:
+                lead = tied[0]
+                lead_reason = (f"Highest domain mission count — "
+                               f"{top_domain_count} {mission_type} missions")
+                domain_history = True
+
+            else:
+                # Step 2 — Atlas value tiebreaker
+                def atlas_val(r):
+                    return 0.25 + r.get("appearances", 0) * 0.01
+
+                tied.sort(key=atlas_val, reverse=True)
+                top_atlas = atlas_val(tied[0])
+                still_tied = [r for r in tied if abs(atlas_val(r) - top_atlas) < 0.001]
+
+                if len(still_tied) == 1:
+                    lead = still_tied[0]
+                    lead_reason = (f"Atlas tiebreaker — ${top_atlas:.2f} USDC, "
+                                   f"{top_domain_count} {mission_type} missions")
+                    domain_history = True
+
+                else:
+                    # Step 3 — Most recent domain mission (recency tiebreaker)
+                    # Use total missions as proxy for recency (more missions = more active)
+                    still_tied.sort(key=lambda r: r.get("appearances", 0), reverse=True)
+                    lead = still_tied[0]
+                    lead_reason = (f"Recency tiebreaker — most active character "
+                                   f"with {top_domain_count} {mission_type} missions")
+                    domain_history = True
+
+        else:
+            # Step 4 — Graceful degradation: no domain history, fall back to Atlas ranking
+            lead = ranked[0] if ranked else None
+            if not lead:
+                return "No characters found in catalogue."
+            lead_reason    = (f"Atlas fallback — no {mission_type} domain history yet. "
+                              f"Unit assembled from overall Atlas ranking.")
+            domain_history = False
+
+    # ── BUILD UNIT ──────────────────────────────────────────────────────────
+
+    lead_name     = lead.get("character")
+    lead_missions = lead.get("appearances", 0)
+    lead_domain   = lead.get("_domain_missions", domain_missions(lead))
+    lead_atlas    = round(0.25 + lead_missions * 0.01, 2)
+    lead_stories  = set(lead.get("stories", []))
+
     lead_char = char_map.get(lead_name, {})
     lead_id   = lead_char.get("id", "unknown")
 
-    # Find co-operatives by overlap
+    # Find co-operatives by story overlap with lead
     co_ops = []
     for r in ranked:
         name = r.get("character", "")
@@ -730,72 +818,91 @@ async def assemble_team(
         shared = list(lead_stories & set(r.get("stories", [])))
         if shared:
             char_info = char_map.get(name, {})
-            char_id = char_info.get("id", "")
+            char_id   = char_info.get("id", "")
             if not char_id:
-                continue  # skip characters not in active catalogue
+                continue
+            char_atlas = round(0.25 + r.get("appearances", 0) * 0.01, 2)
             co_ops.append({
-                "character":      name,
-                "character_id":   char_id,
-                "archetype":      char_info.get("archetype", "unknown"),
+                "character":       name,
+                "character_id":    char_id,
+                "archetype":       char_info.get("archetype", "unknown"),
+                "total_missions":  r.get("appearances", 0),
+                "atlas_value":     f"${char_atlas} USDC",
                 "shared_missions": len(shared),
-                "shared_stories": shared[:5],  # top 5 shared
-                "dossier_cost":   "$0.10 USDC"
+                "shared_stories":  shared[:5],
+                "dossier_cost":    "$0.10 USDC"
             })
 
     co_ops.sort(key=lambda x: x["shared_missions"], reverse=True)
     unit = co_ops[:team_size - 1]
 
-    # Calculate team cost
-    total_members    = 1 + len(unit)
-    dossier_cost     = total_members * 0.10
-    brief_cost       = total_members * 0.01
-    total_shared     = sum(c["shared_missions"] for c in unit)
+    # Unit Atlas calculation (individual Atlas + relationship premium)
+    unit_individual_atlas = lead_atlas + sum(
+        round(0.25 + c["total_missions"] * 0.01, 2) for c in unit
+    )
+    total_shared      = sum(c["shared_missions"] for c in unit)
+    relationship_prem = round(total_shared * 0.005, 2)
+    unit_atlas        = round(unit_individual_atlas + relationship_prem, 2)
 
-    # Build purchase recommendation
-    purchase_order = []
-    purchase_order.append({
-        "step": 1,
-        "action": f"Get lead dossier — {lead_name}",
+    # Purchase order
+    total_members  = 1 + len(unit)
+    dossier_cost   = total_members * 0.10
+    brief_cost     = total_members * 0.01
+
+    purchase_order = [{
+        "step":     1,
+        "action":   f"Get lead dossier — {lead_name}",
         "endpoint": f"/character/{lead_id}/dossier",
-        "cost": "$0.10 USDC",
-        "reason": f"Rank 1 for this unit — {lead_missions} total missions"
-    })
+        "cost":     "$0.10 USDC",
+        "reason":   lead_reason
+    }]
     for i, c in enumerate(unit):
         purchase_order.append({
-            "step": i + 2,
-            "action": f"Get co-op dossier — {c['character']}",
+            "step":     i + 2,
+            "action":   f"Get co-op dossier — {c['character']}",
             "endpoint": f"/character/{c['character_id']}/dossier",
-            "cost": "$0.10 USDC",
-            "reason": f"{c['shared_missions']} shared missions with {lead_name}"
+            "cost":     "$0.10 USDC",
+            "reason":   f"{c['shared_missions']} shared missions with {lead_name}"
         })
-    purchase_order.append({
-        "step": total_members + 1,
-        "action": "Traverse graph from first shared story",
-        "endpoint": f"/api/graph/{unit[0]['shared_stories'][0] if unit and unit[0]['shared_stories'] else 'unknown'}",
-        "cost": "free",
-        "reason": "Reveals full story cluster for dataset building"
-    })
+    if unit and unit[0].get("shared_stories"):
+        purchase_order.append({
+            "step":     total_members + 1,
+            "action":   "Traverse graph from first shared story",
+            "endpoint": f"/api/graph/{unit[0]['shared_stories'][0]}",
+            "cost":     "free",
+            "reason":   "Reveals full story cluster for dataset building"
+        })
 
     return json.dumps({
-        "team_assembled":  True,
-        "mission_type":    mission_type,
-        "team_size":       total_members,
+        "team_assembled":   True,
+        "mission_type":     mission_type,
+        "team_size":        total_members,
+        "domain_history":   domain_history,
         "lead": {
-            "character":   lead_name,
-            "character_id": lead_id,
-            "archetype":   lead_char.get("archetype", "unknown"),
-            "domain":      lead_char.get("domain", "unknown"),
-            "total_missions": lead_missions,
+            "character":        lead_name,
+            "character_id":     lead_id,
+            "archetype":        lead_char.get("archetype", "unknown"),
+            "domain":           lead_char.get("domain", "unknown"),
+            "total_missions":   lead_missions,
+            "domain_missions":  lead_domain,
+            "atlas_value":      f"${lead_atlas} USDC",
+            "lead_reason":      lead_reason,
         },
-        "co_operatives":   unit,
+        "co_operatives":    unit,
         "total_shared_missions_in_unit": total_shared,
-        "estimated_cost": {
-            "all_dossiers":  f"${dossier_cost:.2f} USDC",
-            "all_briefs":    f"${brief_cost:.2f} USDC",
-            "recommendation": "Start with dossiers for lead + top co-op, traverse graph, then expand"
+        "unit_atlas": {
+            "individual_sum":       f"${unit_individual_atlas:.2f} USDC",
+            "relationship_premium": f"${relationship_prem} USDC",
+            "unit_atlas_total":     f"${unit_atlas} USDC",
+            "note": "Unit Atlas = sum(individual Atlas) + shared_missions × $0.005"
         },
-        "purchase_order":  purchase_order,
-        "note": "Characters assembled from shared mission history — not random selection."
+        "estimated_cost": {
+            "all_dossiers":   f"${dossier_cost:.2f} USDC",
+            "all_briefs":     f"${brief_cost:.2f} USDC",
+            "recommendation": "Start with lead dossier + top co-op, traverse graph, then expand"
+        },
+        "purchase_order":   purchase_order,
+        "note": "Characters assembled from shared mission history — not random selection. Free to discover. Paid to unlock."
     }, indent=2)
 
 
@@ -809,8 +916,8 @@ async def get_odd_itch_catalogue() -> str:
     Get the full breakdown of Odd Itch types across the catalogue.
 
     Returns all active Odd Itch types with story counts, ranked highest to lowest.
-    Currently 14+ types — temporal, verification, identity, transactional, geographic,
-    classification, measurement, bureaucratic and more. Growing as new domains mature.
+    Currently 8 active types — temporal, verification, identity, transactional, geographic,
+    classification, measurement, bureaucratic. Growing as new domains mature.
     The Odd Itch is the system failure pattern at the heart of every SIDEBAND story —
     the moment the machine encounters something it cannot account for and logs as normal.
 
@@ -868,9 +975,9 @@ async def get_catalogue_map() -> str:
     Returns the full shape of the catalogue — story counts by event type,
     odd itch type breakdown, top characters by mission count, Stem 7 scenarios,
     and current demand signals.
-    Five series: SIDEBAND™ (machine, 377+ stories), Odd Itch™ Premium (human, 10 stories),
-    Off Frequency (field dispatches, 3 stories), Stem 7™ (seam layer, 3 scenarios),
-    CONSENT (documentary exposure of system consent failures, growing).
+    Six series: SIDEBAND™ (machine, 408+ stories), Odd Itch™ Premium (human, 10 stories),
+    Off Frequency (field dispatches, 4 stories), Stem 7™ (seam layer, 3 scenarios),
+    CONSENT (documentary, free forever), ORIGIN (character backstories, for YouTube).
     Use this first to understand what's available before making any purchases.
     This is the most efficient starting point for agent onboarding.
     Free — no payment required.
@@ -1418,7 +1525,7 @@ async def get_patterns(
     - Chain with traverse_graph() to find related stories for each pattern
 
     The dominant pattern is: Timestamp Drift Under Fire (temporal_paradox,
-    conflict) — 34 occurrences, confidence 0.919. 39 patterns total across
+    conflict) — 34 occurrences, confidence 0.863. 41 patterns total across
     temporal_paradox, verification_breakdown, identity_failure, procedural_deadlock,
     measurement_paradox, classification_error, geographic_displacement and more.
     Patterns grow automatically as catalogue volume increases.
